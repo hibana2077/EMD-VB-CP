@@ -86,6 +86,17 @@ def benchmark_method(method, method_name: str, train_tensor: np.ndarray,
     # Compute metrics
     metrics = compute_metrics(test_values, predictions)
     
+    # Extract key convergence information for CSV
+    conv_info = getattr(model, 'convergence_info_', {})
+    convergence_summary = {
+        'final_iteration': conv_info.get('final_iteration', None),
+        'converged': conv_info.get('converged', None),
+        'final_elbo': conv_info.get('final_elbo', None),
+        'n_effective_samples': conv_info.get('n_effective_samples', None),
+        'early_stopped': conv_info.get('early_stopped', None),
+        'final_reconstruction_error': conv_info.get('reconstruction_errors', [])[-1] if conv_info.get('reconstruction_errors') else None
+    }
+    
     results = {
         'method': method_name,
         'rmse': metrics['rmse'],
@@ -93,8 +104,12 @@ def benchmark_method(method, method_name: str, train_tensor: np.ndarray,
         'fit_time': fit_time,
         'predict_time': predict_time,
         'total_time': fit_time + predict_time,
-        'convergence_info': getattr(model, 'convergence_info_', {}),
-        'model': model  # Store model for analysis
+        'final_iteration': convergence_summary['final_iteration'],
+        'converged': convergence_summary['converged'],
+        'final_elbo': convergence_summary['final_elbo'],
+        'final_reconstruction_error': convergence_summary['final_reconstruction_error'],
+        'n_effective_samples': convergence_summary['n_effective_samples'],
+        'early_stopped': convergence_summary['early_stopped']
     }
     
     print(f"{method_name} - RMSE: {metrics['rmse']:.6f}, NLL: {metrics['nll']:.6f}, Time: {fit_time:.2f}s")

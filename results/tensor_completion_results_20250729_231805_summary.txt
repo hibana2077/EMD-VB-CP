@@ -1,0 +1,32 @@
+TENSOR COMPLETION EXPERIMENT RESULTS
+==================================================
+
+Dataset Information:
+Methods: ['EMD-VI' 'CP-ALS']
+Missing rates: [0.1, 0.25, 0.5]
+Runs per condition: 5
+
+RMSE Results (mean Å} std):
+                mean             std        
+method        CP-ALS  EMD-VI  CP-ALS  EMD-VI
+missing_rate                                
+0.10          1.0266  1.0155  0.0362  0.0294
+0.25          0.8535  1.0109  0.0373  0.0186
+0.50          0.5851  1.0054  0.0777  0.0236
+
+NLL Results (mean Å} std):
+                mean             std        
+method        CP-ALS  EMD-VI  CP-ALS  EMD-VI
+missing_rate                                
+0.10          0.5275  0.5160  0.0373  0.0304
+0.25          0.3648  0.5111  0.0316  0.0190
+0.50          0.1736  0.5057  0.0458  0.0240
+
+Training Time Results (mean Å} std seconds):
+               mean           std       
+method       CP-ALS EMD-VI CP-ALS EMD-VI
+missing_rate                            
+0.10           7.27   9.96   0.26   0.03
+0.25           7.85  24.17   0.07   0.12
+0.50           8.39  50.46   0.45   0.87
+

@@ -3,7 +3,7 @@
 #PBS -q normal
 #PBS -l ngpus=0
 #PBS -l ncpus=32
-#PBS -l mem=32GB
+#PBS -l mem=8GB
 #PBS -l walltime=03:00:00
 #PBS -l wd
 #PBS -l storage=scratch/rp06
