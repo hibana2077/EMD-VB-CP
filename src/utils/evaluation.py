@@ -204,12 +204,12 @@ def run_experiment(tensor: np.ndarray, missing_rates: List[float],
                     'verbose': False,
                     'tol': 1e-6
                 }),
-                (BayesianCPMCMC, "Bayesian-CP-MCMC", {
-                    'rank': rank, 
-                    'n_samples': 5000, 
-                    'burn_in': 2000, 
-                    'verbose': False
-                })
+                # (BayesianCPMCMC, "Bayesian-CP-MCMC", {
+                #     'rank': rank, 
+                #     'n_samples': 5000, 
+                #     'burn_in': 2000, 
+                #     'verbose': False
+                # })
             ]
             
             # Benchmark each method
