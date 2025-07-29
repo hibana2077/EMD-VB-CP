@@ -1,5 +1,6 @@
 #!/bin/bash
 #PBS -P rp06
+#PBS -q normal
 #PBS -l ngpus=0
 #PBS -l ncpus=16
 #PBS -l mem=16GB
