@@ -8,7 +8,7 @@
 #PBS -l storage=scratch/rp06
 
 # 啟用 virtualenv
-source /scratch/rp06/sl5952/EMD-VB-CP/bin/activate
+source /scratch/rp06/sl5952/EMD-VB-CP/.venv/bin/activate
 
 # Run the experiment script
 cd experiments
