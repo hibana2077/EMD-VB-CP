@@ -13,4 +13,4 @@ source /scratch/rp06/sl5952/EMD-VB-CP/.venv/bin/activate
 
 # Run the experiment script
 cd experiments
-python run_experiments.py
+python run_experiment.py
