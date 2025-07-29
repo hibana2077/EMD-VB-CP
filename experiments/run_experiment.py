@@ -94,22 +94,22 @@ def main():
         # Save additional analysis
         analysis_file = results_path / "analysis_summary.txt"
         with open(analysis_file, 'w') as f:
-            f.write("EMD-VB-CP Experiment Analysis\\n")
-            f.write("="*50 + "\\n\\n")
-            f.write(f"Dataset: Gas Sensor Array Drift\\n")
-            f.write(f"Tensor shape: {tensor.shape}\\n")
-            f.write(f"Missing rates tested: {args.missing_rates}\\n")
-            f.write(f"CP rank: {args.rank}\\n")
-            f.write(f"Number of runs: {args.n_runs}\\n\\n")
+            f.write("EMD-VB-CP Experiment Analysis\n")
+            f.write("="*50 + "\n\n")
+            f.write(f"Dataset: Gas Sensor Array Drift\n")
+            f.write(f"Tensor shape: {tensor.shape}\n")
+            f.write(f"Missing rates tested: {args.missing_rates}\n")
+            f.write(f"CP rank: {args.rank}\n")
+            f.write(f"Number of runs: {args.n_runs}\n\n")
             
             # Performance summary
             best_method_by_rmse = results_df.loc[results_df.groupby('missing_rate')['rmse'].idxmin()]
-            f.write("Best method by RMSE for each missing rate:\\n")
+            f.write("Best method by RMSE for each missing rate:\n")
             for _, row in best_method_by_rmse.iterrows():
                 f.write(f"  {row['missing_rate']*100:.0f}% missing: {row['method']} "
-                       f"(RMSE: {row['rmse']:.6f})\\n")
+                       f"(RMSE: {row['rmse']:.6f})\n")
             
-            f.write("\\nDetailed Results:\\n")
+            f.write("\nDetailed Results:\n")
             summary_stats = results_df.groupby(['method', 'missing_rate']).agg({
                 'rmse': ['mean', 'std'],
                 'nll': ['mean', 'std'], 
@@ -117,7 +117,7 @@ def main():
             }).round(6)
             f.write(str(summary_stats))
         
-        print(f"\\nAnalysis saved to: {analysis_file}")
+        print(f"\nAnalysis saved to: {analysis_file}")
         print("Experiment completed successfully!")
         
         return 0

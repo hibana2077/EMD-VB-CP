@@ -78,7 +78,7 @@ def main():
     print(f"Test set size: {test_size}")
     
     # Test EMD-VB-CP
-    print("\\nTesting EMD-VB-CP...")
+    print("\nTesting EMD-VB-CP...")
     emd_model = EMDVBCP(rank=5, max_iter=100, verbose=True)
     emd_model.fit(train_tensor, mask=mask)
     
@@ -90,7 +90,7 @@ def main():
     print(f"  NLL: {emd_metrics['nll']:.6f}")
     
     # Test CP-ALS baseline
-    print("\\nTesting CP-ALS baseline...")
+    print("\nTesting CP-ALS baseline...")
     als_model = CPALS(rank=5, max_iter=100, verbose=True)
     als_model.fit(train_tensor, mask=mask)
     
@@ -102,11 +102,11 @@ def main():
     print(f"  NLL: {als_metrics['nll']:.6f}")
     
     # Compare results
-    print("\\nComparison:")
+    print("\nComparison:")
     print(f"EMD-VB-CP RMSE improvement: {(als_metrics['rmse'] - emd_metrics['rmse'])/als_metrics['rmse']*100:.1f}%")
     print(f"EMD-VB-CP NLL improvement: {(als_metrics['nll'] - emd_metrics['nll'])/als_metrics['nll']*100:.1f}%")
     
-    print("\\nDemo completed successfully!")
+    print("\nDemo completed successfully!")
 
 if __name__ == "__main__":
     main()
