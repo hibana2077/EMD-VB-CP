@@ -5,10 +5,57 @@ Implements CP-ALS and Bayesian CP-MCMC methods
 
 import numpy as np
 import scipy.sparse as sp
-from scipy.linalg import pinv, norm
+from scipy.linalg import pinv, norm, solve_triangular
 from sklearn.utils import check_random_state
 from typing import Tuple, Optional, List, Dict
 import warnings
+
+# Try to import numba for optimization, fallback if not available
+try:
+    from numba import jit, prange
+    NUMBA_AVAILABLE = True
+    
+    @jit(nopython=True, parallel=True)
+    def _compute_design_matrix_numba(observed_indices, factor_0, factor_1, factor_2, 
+                                   factor_idx, rank):
+        """Numba-optimized design matrix computation"""
+        n_obs = observed_indices.shape[0]
+        design_matrix = np.ones((n_obs, rank))
+        
+        if factor_idx == 0:  # Mode 0, use factors 1 and 2
+            for i in prange(n_obs):
+                idx_j, idx_k = observed_indices[i, 1], observed_indices[i, 2]
+                for r in range(rank):
+                    design_matrix[i, r] = factor_1[idx_j, r] * factor_2[idx_k, r]
+        elif factor_idx == 1:  # Mode 1, use factors 0 and 2
+            for i in prange(n_obs):
+                idx_i, idx_k = observed_indices[i, 0], observed_indices[i, 2]
+                for r in range(rank):
+                    design_matrix[i, r] = factor_0[idx_i, r] * factor_2[idx_k, r]
+        else:  # Mode 2, use factors 0 and 1
+            for i in prange(n_obs):
+                idx_i, idx_j = observed_indices[i, 0], observed_indices[i, 1]
+                for r in range(rank):
+                    design_matrix[i, r] = factor_0[idx_i, r] * factor_1[idx_j, r]
+        
+        return design_matrix
+    
+    @jit(nopython=True, parallel=True)
+    def _compute_reconstruction_numba(observed_indices, factor_0, factor_1, factor_2, rank):
+        """Numba-optimized reconstruction computation"""
+        n_obs = observed_indices.shape[0]
+        reconstruction = np.zeros(n_obs)
+        
+        for i in prange(n_obs):
+            idx_i, idx_j, idx_k = observed_indices[i, 0], observed_indices[i, 1], observed_indices[i, 2]
+            for r in range(rank):
+                reconstruction[i] += factor_0[idx_i, r] * factor_1[idx_j, r] * factor_2[idx_k, r]
+        
+        return reconstruction
+        
+except ImportError:
+    NUMBA_AVAILABLE = False
+    print("Numba not available, using standard NumPy operations")
 
 class CPALS:
     """
@@ -156,96 +203,177 @@ class CPALS:
 class BayesianCPMCMC:
     """
     Bayesian CP decomposition using MCMC (Gibbs sampling)
-    Simplified implementation for baseline comparison
+    Optimized implementation for better performance
     """
     
-    def __init__(self, rank: int, n_samples: int = 5000, burn_in: int = 2000,
+    def __init__(self, rank: int, n_samples: int = 2000, burn_in: int = 800,
                  noise_precision: float = 1.0, factor_precision: float = 1.0,
-                 verbose: bool = True):
+                 verbose: bool = True, thinning: int = 2, 
+                 convergence_check: bool = True, convergence_window: int = 200,
+                 batch_size: int = None):
         self.rank = rank
         self.n_samples = n_samples
         self.burn_in = burn_in
         self.noise_precision = noise_precision
         self.factor_precision = factor_precision
         self.verbose = verbose
+        self.thinning = thinning  # Default to thinning=2 for better performance
+        self.convergence_check = convergence_check
+        self.convergence_window = convergence_window
+        self.batch_size = batch_size  # For batch processing of large datasets
         
         self.factor_samples_ = None
         self.noise_samples_ = None
         self.convergence_info_ = {}
+        
+        # Pre-allocated arrays for efficiency
+        self._design_matrices = None
+        self._row_masks = None
     
-    def _sample_factor_conditional(self, factor_idx: int, factors: List[np.ndarray],
-                                 observed_data: np.ndarray, observed_indices: np.ndarray,
-                                 noise_precision: float) -> np.ndarray:
-        """Sample factor matrix from conditional posterior (simplified)"""
-        shape = factors[factor_idx].shape
+    def _precompute_structures(self, observed_indices: np.ndarray, shape: Tuple[int, int, int]):
+        """Pre-compute data structures for efficient sampling"""
+        # Pre-compute row masks for each mode
+        self._row_masks = []
+        for mode in range(3):
+            mode_masks = []
+            for row in range(shape[mode]):
+                mask = observed_indices[:, mode] == row
+                mode_masks.append(mask)
+            self._row_masks.append(mode_masks)
+    
+    def _compute_design_matrix_vectorized(self, factor_idx: int, factors: List[np.ndarray],
+                                        observed_indices: np.ndarray) -> np.ndarray:
+        """Efficiently compute design matrix using vectorized operations"""
+        if NUMBA_AVAILABLE:
+            return _compute_design_matrix_numba(
+                observed_indices, factors[0], factors[1], factors[2], factor_idx, self.rank)
         
-        # For simplicity, use a Gibbs-like update with Gaussian approximation
-        # This is a simplified version - full implementation would use proper conjugate priors
-        
-        # Compute sufficient statistics
-        other_modes = [i for i in range(3) if i != factor_idx]
-        
-        # Build design matrix for this mode
+        # Fallback to NumPy implementation
         n_obs = len(observed_indices)
         design_matrix = np.ones((n_obs, self.rank))
         
-        for i, (idx_i, idx_j, idx_k) in enumerate(observed_indices):
-            mode_indices = [idx_i, idx_j, idx_k]
-            for r in range(self.rank):
-                design_val = 1.0
-                for other_mode in other_modes:
-                    design_val *= factors[other_mode][mode_indices[other_mode], r]
-                design_matrix[i, r] = design_val
+        other_modes = [i for i in range(3) if i != factor_idx]
         
-        # Sample each row of the factor matrix
+        # Vectorized computation
+        for r in range(self.rank):
+            for other_mode in other_modes:
+                design_matrix[:, r] *= factors[other_mode][observed_indices[:, other_mode], r]
+        
+        return design_matrix
+    
+    def _sample_factor_conditional_vectorized(self, factor_idx: int, factors: List[np.ndarray],
+                                            observed_data: np.ndarray, observed_indices: np.ndarray,
+                                            noise_precision: float) -> np.ndarray:
+        """Optimized factor sampling with vectorized operations and batching"""
+        shape = factors[factor_idx].shape
         new_factor = np.zeros_like(factors[factor_idx])
         
-        for row in range(shape[0]):
-            # Find observations involving this row
-            row_mask = observed_indices[:, factor_idx] == row
-            if not np.any(row_mask):
-                # No observations for this row, sample from prior
-                new_factor[row, :] = np.random.normal(0, 1/np.sqrt(self.factor_precision), self.rank)
-                continue
+        # Pre-compute design matrix once
+        design_matrix = self._compute_design_matrix_vectorized(factor_idx, factors, observed_indices)
+        
+        # Vectorized sampling for all rows with smart batching
+        prior_precision_inv = 1.0 / self.factor_precision
+        prior_precision = self.factor_precision * np.eye(self.rank)
+        
+        # Determine batch size for processing rows
+        batch_size = self.batch_size or min(50, shape[0])
+        
+        for batch_start in range(0, shape[0], batch_size):
+            batch_end = min(batch_start + batch_size, shape[0])
+            batch_rows = range(batch_start, batch_end)
             
-            y_row = observed_data[row_mask]
-            X_row = design_matrix[row_mask, :]
-            
-            # Posterior precision and mean
-            posterior_precision = self.factor_precision * np.eye(self.rank) + noise_precision * (X_row.T @ X_row)
-            posterior_mean = noise_precision * np.linalg.solve(posterior_precision, X_row.T @ y_row)
-            
-            # Sample from multivariate normal
-            try:
-                posterior_cov = np.linalg.inv(posterior_precision)
-                new_factor[row, :] = np.random.multivariate_normal(posterior_mean, posterior_cov)
-            except np.linalg.LinAlgError:
-                # Fallback to diagonal approximation
-                new_factor[row, :] = np.random.normal(posterior_mean, 1/np.sqrt(np.diag(posterior_precision)))
+            for row in batch_rows:
+                row_mask = self._row_masks[factor_idx][row]
+                
+                if not np.any(row_mask):
+                    # Sample from prior
+                    new_factor[row, :] = np.random.normal(0, np.sqrt(prior_precision_inv), self.rank)
+                    continue
+                
+                y_row = observed_data[row_mask]
+                X_row = design_matrix[row_mask, :]
+                
+                # Efficient posterior computation using Woodbury matrix identity for small rank
+                XTX = X_row.T @ X_row
+                XTy = X_row.T @ y_row
+                
+                if self.rank <= 10:  # Use direct inversion for small rank
+                    posterior_precision = prior_precision + noise_precision * XTX
+                    
+                    try:
+                        # Use Cholesky decomposition for numerical stability
+                        L = np.linalg.cholesky(posterior_precision)
+                        
+                        # Solve for posterior mean
+                        posterior_mean = solve_triangular(
+                            L, solve_triangular(L, noise_precision * XTy, lower=True), 
+                            lower=True, trans='T')
+                        
+                        # Sample using Cholesky factor
+                        z = np.random.normal(0, 1, self.rank)
+                        sample = posterior_mean + solve_triangular(L, z, lower=True)
+                        new_factor[row, :] = sample
+                        
+                    except np.linalg.LinAlgError:
+                        # Fallback to diagonal approximation
+                        diag_precision = np.diag(prior_precision) + noise_precision * np.diag(XTX)
+                        posterior_mean = noise_precision * XTy / diag_precision
+                        posterior_std = 1.0 / np.sqrt(diag_precision)
+                        new_factor[row, :] = np.random.normal(posterior_mean, posterior_std)
+                
+                else:  # Use Woodbury for larger rank
+                    # Woodbury matrix identity: (A + UCV)^{-1} = A^{-1} - A^{-1}U(C^{-1} + VA^{-1}U)^{-1}VA^{-1}
+                    A_inv = prior_precision_inv * np.eye(self.rank)
+                    U = X_row.T
+                    V = X_row
+                    C_inv = np.eye(len(y_row)) / noise_precision
+                    
+                    # Compute the Woodbury correction
+                    temp = C_inv + V @ A_inv @ U
+                    try:
+                        temp_inv = np.linalg.inv(temp)
+                        posterior_cov = A_inv - A_inv @ U @ temp_inv @ V @ A_inv
+                        posterior_mean = posterior_cov @ (noise_precision * XTy)
+                        
+                        # Sample from multivariate normal
+                        new_factor[row, :] = np.random.multivariate_normal(posterior_mean, posterior_cov)
+                    except np.linalg.LinAlgError:
+                        # Fallback
+                        new_factor[row, :] = np.random.normal(0, np.sqrt(prior_precision_inv), self.rank)
         
         return new_factor
     
+    def _compute_reconstruction_vectorized(self, factors: List[np.ndarray], observed_indices: np.ndarray) -> np.ndarray:
+        """Efficiently compute tensor reconstruction using vectorized operations"""
+        if NUMBA_AVAILABLE:
+            return _compute_reconstruction_numba(
+                observed_indices, factors[0], factors[1], factors[2], self.rank)
+        
+        # Fallback to NumPy implementation
+        # Extract factor values at observed indices
+        factor_values = []
+        for mode in range(3):
+            factor_values.append(factors[mode][observed_indices[:, mode], :])
+        
+        # Compute reconstruction as element-wise product and sum
+        reconstruction = np.sum(factor_values[0] * factor_values[1] * factor_values[2], axis=1)
+        return reconstruction
+    
     def _sample_noise_precision(self, factors: List[np.ndarray], observed_data: np.ndarray,
                               observed_indices: np.ndarray) -> float:
-        """Sample noise precision from conditional posterior"""
-        # Compute residual sum of squares
-        reconstruction = np.zeros(len(observed_data))
-        for i, (idx_i, idx_j, idx_k) in enumerate(observed_indices):
-            for r in range(self.rank):
-                reconstruction[i] += (factors[0][idx_i, r] * 
-                                    factors[1][idx_j, r] * 
-                                    factors[2][idx_k, r])
-        
+        """Sample noise precision from conditional posterior - optimized version"""
+        # Vectorized reconstruction computation
+        reconstruction = self._compute_reconstruction_vectorized(factors, observed_indices)
         residual_ss = np.sum((observed_data - reconstruction)**2)
         
-        # Gamma prior/posterior (simplified)
+        # Gamma prior/posterior
         alpha = 1.0 + len(observed_data) / 2
         beta = 1.0 + residual_ss / 2
         
         return np.random.gamma(alpha, 1/beta)
     
     def fit(self, tensor_data: np.ndarray, mask: Optional[np.ndarray] = None) -> 'BayesianCPMCMC':
-        """Fit Bayesian CP model using MCMC"""
+        """Fit Bayesian CP model using optimized MCMC"""
         shape = tensor_data.shape
         
         if mask is None:
@@ -254,81 +382,141 @@ class BayesianCPMCMC:
         observed_indices = np.column_stack(np.where(mask))
         observed_data = tensor_data[mask]
         
-        if self.verbose:
-            print(f"Starting Bayesian CP-MCMC with {self.n_samples} samples ({self.burn_in} burn-in)")
+        # Pre-compute efficient data structures
+        self._precompute_structures(observed_indices, shape)
         
-        # Initialize factors
+        if self.verbose:
+            print(f"Starting Optimized Bayesian CP-MCMC with {self.n_samples} samples ({self.burn_in} burn-in)")
+            print(f"Tensor shape: {shape}, Rank: {self.rank}, Observed entries: {len(observed_data)}")
+        
+        # Initialize factors with better initialization
         factors = []
         for dim in shape:
-            factor = np.random.normal(0, 1, (dim, self.rank))
+            # Use smaller initial variance for better convergence
+            factor = np.random.normal(0, 0.1, (dim, self.rank))
             factors.append(factor)
         
         noise_precision = self.noise_precision
         
-        # Storage for samples
-        factor_samples = [[] for _ in range(3)]
-        noise_samples = []
+        # More memory-efficient storage with thinning
+        effective_samples = (self.n_samples - self.burn_in) // self.thinning
+        factor_samples = [np.zeros((effective_samples, factors[i].shape[0], self.rank)) for i in range(3)]
+        noise_samples = np.zeros(effective_samples)
         
-        # MCMC sampling
+        sample_idx = 0
+        rmse_history = []
+        
+        # MCMC sampling with optimizations
         for sample in range(self.n_samples):
-            # Sample each factor matrix
+            # Sample each factor matrix using optimized method
             for mode in range(3):
-                factors[mode] = self._sample_factor_conditional(
+                factors[mode] = self._sample_factor_conditional_vectorized(
                     mode, factors, observed_data, observed_indices, noise_precision)
             
             # Sample noise precision
             noise_precision = self._sample_noise_precision(factors, observed_data, observed_indices)
             
-            # Store samples after burn-in
-            if sample >= self.burn_in:
-                for mode in range(3):
-                    factor_samples[mode].append(factors[mode].copy())
-                noise_samples.append(noise_precision)
+            # Monitor convergence
+            if sample % 50 == 0:  # Check every 50 samples
+                reconstruction = self._compute_reconstruction_vectorized(factors, observed_indices)
+                rmse = np.sqrt(np.mean((observed_data - reconstruction)**2))
+                rmse_history.append(rmse)
+                
+                # Early stopping check
+                if (self.convergence_check and sample > self.burn_in + self.convergence_window and 
+                    len(rmse_history) >= self.convergence_window // 50):
+                    recent_rmse = rmse_history[-(self.convergence_window // 50):]
+                    if np.std(recent_rmse) < 1e-6:  # Converged
+                        if self.verbose:
+                            print(f"Early convergence detected at sample {sample}")
+                        break
             
-            if self.verbose and sample % 500 == 0:
-                print(f"MCMC Sample {sample}/{self.n_samples}")
+            # Store samples after burn-in with thinning
+            if sample >= self.burn_in and (sample - self.burn_in) % self.thinning == 0:
+                if sample_idx < effective_samples:  # Handle early stopping
+                    for mode in range(3):
+                        factor_samples[mode][sample_idx] = factors[mode].copy()
+                    noise_samples[sample_idx] = noise_precision
+                    sample_idx += 1
+            
+            if self.verbose and sample % max(500, self.n_samples // 20) == 0:
+                print(f"MCMC Sample {sample}/{self.n_samples}, RMSE: {rmse_history[-1] if rmse_history else 'N/A':.6f}, Noise precision: {noise_precision:.3f}")
+        
+        # Trim arrays if early stopping occurred
+        if sample_idx < effective_samples:
+            for mode in range(3):
+                factor_samples[mode] = factor_samples[mode][:sample_idx]
+            noise_samples = noise_samples[:sample_idx]
+            effective_samples = sample_idx
         
         self.factor_samples_ = factor_samples
         self.noise_samples_ = noise_samples
         self.convergence_info_ = {
-            'n_effective_samples': len(noise_samples),
-            'mean_noise_precision': np.mean(noise_samples)
+            'n_effective_samples': effective_samples,
+            'mean_noise_precision': np.mean(noise_samples) if len(noise_samples) > 0 else self.noise_precision,
+            'final_rmse': rmse_history[-1] if rmse_history else None,
+            'thinning': self.thinning,
+            'rmse_history': rmse_history,
+            'early_stopped': sample < self.n_samples - 1,
+            'final_sample': sample
         }
         
         if self.verbose:
-            print(f"MCMC completed. Effective samples: {len(noise_samples)}")
+            print(f"MCMC completed. Effective samples: {effective_samples}")
+            print(f"Mean noise precision: {np.mean(noise_samples):.3f}")
         
         return self
     
-    def predict(self, indices: Optional[np.ndarray] = None, use_mean: bool = True) -> np.ndarray:
-        """Predict using posterior mean or samples"""
+    def predict(self, indices: Optional[np.ndarray] = None, use_mean: bool = True, 
+                return_std: bool = False) -> np.ndarray:
+        """Predict using posterior mean or samples - optimized version"""
         if self.factor_samples_ is None:
             raise ValueError("Model has not been fitted yet")
         
         if use_mean:
-            # Use posterior mean
+            # Use posterior mean - more efficient computation
             mean_factors = [np.mean(samples, axis=0) for samples in self.factor_samples_]
             
             if indices is None:
-                # Reconstruct full tensor
+                # Reconstruct full tensor using vectorized operations
                 I, J, K = [f.shape[0] for f in mean_factors]
                 tensor = np.zeros((I, J, K))
+                
+                # Vectorized reconstruction
                 for r in range(self.rank):
-                    tensor += np.outer(mean_factors[0][:, r], 
-                                     np.outer(mean_factors[1][:, r], mean_factors[2][:, r])).reshape(I, J, K)
+                    # Use broadcasting for efficient computation
+                    factor_product = np.multiply.outer(mean_factors[0][:, r], 
+                                                     np.multiply.outer(mean_factors[1][:, r], 
+                                                                     mean_factors[2][:, r]))
+                    tensor += factor_product
+                
                 return tensor
             else:
-                # Predict at specific indices
+                # Predict at specific indices using vectorized operations
                 predictions = np.zeros(len(indices))
-                for i, (idx_i, idx_j, idx_k) in enumerate(indices):
-                    for r in range(self.rank):
-                        predictions[i] += (mean_factors[0][idx_i, r] * 
-                                         mean_factors[1][idx_j, r] * 
-                                         mean_factors[2][idx_k, r])
+                for r in range(self.rank):
+                    predictions += (mean_factors[0][indices[:, 0], r] * 
+                                  mean_factors[1][indices[:, 1], r] * 
+                                  mean_factors[2][indices[:, 2], r])
+                
+                if return_std:
+                    # Compute prediction standard deviation
+                    pred_vars = np.zeros(len(indices))
+                    for sample_idx in range(len(self.factor_samples_[0])):
+                        sample_pred = np.zeros(len(indices))
+                        for r in range(self.rank):
+                            sample_pred += (self.factor_samples_[0][sample_idx][indices[:, 0], r] * 
+                                          self.factor_samples_[1][sample_idx][indices[:, 1], r] * 
+                                          self.factor_samples_[2][sample_idx][indices[:, 2], r])
+                        pred_vars += (sample_pred - predictions)**2
+                    
+                    pred_std = np.sqrt(pred_vars / len(self.factor_samples_[0]))
+                    return predictions, pred_std
+                
                 return predictions
         else:
-            # Return prediction uncertainty (not implemented for simplicity)
-            raise NotImplementedError("Prediction with uncertainty not implemented")
+            # Return prediction uncertainty (simplified implementation)
+            raise NotImplementedError("Full posterior sampling not implemented for efficiency")
 
 
 def compute_rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:

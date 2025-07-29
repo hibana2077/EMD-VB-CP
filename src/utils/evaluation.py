@@ -132,9 +132,9 @@ def run_experiment(tensor: np.ndarray, missing_rates: List[float],
     results_df : pd.DataFrame
         DataFrame with all experimental results
     """
-    from ..emd_vb_cp import EMDVBCP
-    from ..emd_vb_cp.baselines import CPALS, BayesianCPMCMC
-    from ..utils.data_loader import create_missing_mask, standardize_tensor, split_train_test
+    from emd_vb_cp import EMDVBCP
+    from emd_vb_cp.baselines import CPALS, BayesianCPMCMC
+    from utils.data_loader import create_missing_mask, standardize_tensor, split_train_test
     
     # Create results directory
     results_path = Path(results_dir)
@@ -175,7 +175,7 @@ def run_experiment(tensor: np.ndarray, missing_rates: List[float],
             
             # Standardize data
             if standardize:
-                from ..utils.data_loader import standardize_tensor, inverse_standardize_tensor
+                from utils.data_loader import standardize_tensor, inverse_standardize_tensor
                 tensor_std, std_stats = standardize_tensor(tensor, observed_mask, mode='global')
             else:
                 tensor_std = tensor

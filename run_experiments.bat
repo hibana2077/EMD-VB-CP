@@ -4,24 +4,6 @@ REM Windows batch script to run EMD-VB-CP experiments
 echo EMD-VB-CP Tensor Completion Experiments
 echo ========================================
 
-REM Check if Python is available
-python --version >nul 2>&1
-if errorlevel 1 (
-    echo Error: Python is not installed or not in PATH
-    echo Please install Python 3.7+ and try again
-    pause
-    exit /b 1
-)
-
-REM Install requirements
-echo Installing requirements...
-pip install -r requirements.txt
-if errorlevel 1 (
-    echo Error installing requirements
-    pause
-    exit /b 1
-)
-
 REM Create results directory
 if not exist "results" mkdir results
 

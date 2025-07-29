@@ -4,21 +4,6 @@
 echo "EMD-VB-CP Tensor Completion Experiments"
 echo "========================================"
 
-# Check if Python is available
-if ! command -v python3 &> /dev/null; then
-    echo "Error: Python 3 is not installed or not in PATH"
-    echo "Please install Python 3.7+ and try again"
-    exit 1
-fi
-
-# Install requirements
-echo "Installing requirements..."
-pip3 install -r requirements.txt
-if [ $? -ne 0 ]; then
-    echo "Error installing requirements"
-    exit 1
-fi
-
 # Create results directory
 mkdir -p results
 
